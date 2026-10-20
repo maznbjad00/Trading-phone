@@ -27,14 +27,32 @@ refreshTimer=setInterval(async()=>{
 }
 async function refreshScanner(){
  try{
-  const r=await fetch('/api/scanner',{cache:'no-store'});const j=await r.json();
-  document.getElementById('scanstatus').textContent='الرصد الآلي: '+j.status+' • '+j.symbol_count+' سهم • '+(j.last_error||'')+' | البوابة التاريخية: غير محملة';
-  const rows=document.getElementById('scanrows');rows.replaceChildren();
-  for(const x of j.rows||[]){
-   const div=document.createElement('div');div.className='row';div.style.cursor='pointer';
-   const label=document.createElement('div');label.className='sym';label.textContent=x.symbol+(x.fire?' 🔥 FIRE':'');
-   const detail=document.createElement('div');detail.className='light';
-   detail.textContent='</script></body></html>'''
+  const res=await fetch('/api/scanner',{cache:'no-store'});
+  const data=await res.json();
+  if(!res.ok)throw Error(data.error||'Scanner API unavailable');
+  document.getElementById('scanstatus').textContent='الرصد: '+(data.status||'غير معروف')+' — '+(data.symbol_count||0)+' سهم — بوابة التاريخ غير محملة';
+  const container=document.getElementById('scanrows');
+  container.replaceChildren();
+  for(const item of (data.rows||[])){
+   const div=document.createElement('div');div.className='row';
+   const title=document.createElement('b');title.textContent=item.symbol+(item.fire?' 🔥':'');
+   const numbers=document.createElement('span');
+   numbers.textContent=' $'+Number(item.price||0).toFixed(4)+' • صافي 5 دقائق $'+Math.round(item.net5||0).toLocaleString();
+   div.append(title,numbers);
+   div.onclick=()=>{document.getElementById('search').value=item.symbol;openSymbol()};
+   container.append(div);
+  }
+ }catch(err){document.getElementById('scanstatus').textContent='تعذر جلب الرصد: '+err.message}
+}
+window.addEventListener('load',()=>{
+ if(typeof LightweightCharts==='undefined'){
+  document.getElementById('msg').textContent='تعذر تحميل مكتبة TradingView. أعد فتح الموقع أو تحقق من الشبكة.';
+ }else{
+  try{openSymbol()}catch(err){document.getElementById('msg').textContent='خطأ تهيئة الشارت: '+err.message}
+ }
+ refreshScanner();setInterval(refreshScanner,15000);
+});
+</script></body></html>'''
 
 def get_liquidity(symbol,key,sec):
  from datetime import datetime,timedelta,timezone
