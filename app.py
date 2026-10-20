@@ -26,7 +26,6 @@ class Handler(BaseHTTPRequestHandler):
    key=os.getenv('ALPACA_API_KEY','');sec=os.getenv('ALPACA_SECRET_KEY','')
    if not key or not sec:return self.out(503,{'error':'أضف مفاتيح Alpaca إلى Railway Variables لعرض الشموع الحقيقية'})
    from datetime import datetime,timedelta,timezone
-   import urllib.error
    end=datetime.now(timezone.utc);start=end-timedelta(days=3)
    stamp=lambda d:d.isoformat().replace('+00:00','Z')
    headers={'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':sec}
