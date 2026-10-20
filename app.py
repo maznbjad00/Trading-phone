@@ -9,7 +9,7 @@ PAGE=r'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><m
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script>
 let c,f;function page(n){document.getElementById('list').style.display=n==='list'?'block':'none';document.getElementById('charts').style.display=n==='charts'?'block':'none';document.getElementById('tab-list').classList.toggle('active',n==='list');document.getElementById('tab-charts').classList.toggle('active',n==='charts');if(n==='charts'&&c){setTimeout(()=>{c.applyOptions({width:document.getElementById('candles').clientWidth});f.applyOptions({width:document.getElementById('flow').clientWidth})},80)}}
 function chart(id,h){let el=document.getElementById(id);return LightweightCharts.createChart(el,{width:el.clientWidth,height:h,layout:{background:{color:'#0d1d30'},textColor:'#a7bed9'},grid:{vertLines:{color:'#182b42'},horzLines:{color:'#182b42'}},rightPriceScale:{borderColor:'#304860'},timeScale:{borderColor:'#304860',timeVisible:true,secondsVisible:false}})}
-async function openSymbol(){let s=document.getElementById('search').value.trim().toUpperCase().replace(/[^A-Z.]/g,'');if(!s)return;document.getElementById('symbol').textContent=s;page('charts');document.getElementById('candles').innerHTML='';document.getElementById('flow').innerHTML='';c=chart('candles',document.getElementById('candles').clientHeight);f=chart('flow',document.getElementById('flow').clientHeight);let series=c.addCandlestickSeries({upColor:'#0d1d30',downColor:'#ef607b',borderUpColor:'#55deb0',borderDownColor:'#ef607b',wickUpColor:'#55deb0',wickDownColor:'#ef607b'});let flow=f.addLineSeries({color:'#55baf4',lineWidth:2});try{let r=await fetch('/api/bars?symbol='+encodeURIComponent(s));let j=await r.json();if(!r.ok)throw Error(j.error||'تعذر تحميل البيانات');series.setData(j.bars);c.timeScale().fitContent();document.getElementById('msg').textContent='شموع سوق حقيقية عند توفر ترخيص Alpaca. خط السيولة سيظهر فقط عند ربط تيار الصفقات، دون تقدير مزيف من حجم الشموع.';}catch(e){document.getElementById('msg').textContent=e.message}}
+async function openSymbol(){let s=document.getElementById('search').value.trim().toUpperCase().replace(/[^A-Z.]/g,'');if(!s)return;document.getElementById('symbol').textContent=s;page('charts');document.getElementById('candles').innerHTML='';document.getElementById('flow').innerHTML='';c=chart('candles',document.getElementById('candles').clientHeight);f=chart('flow',document.getElementById('flow').clientHeight);let series=c.addCandlestickSeries({upColor:'#0d1d30',downColor:'#ef607b',borderUpColor:'#55deb0',borderDownColor:'#ef607b',wickUpColor:'#55deb0',wickDownColor:'#ef607b'});let flow=f.addLineSeries({color:'#55baf4',lineWidth:2});try{let r=await fetch('/api/bars?symbol='+encodeURIComponent(s));let j=await r.json();if(!r.ok)throw Error(j.error||'تعذر تحميل البيانات');series.setData(j.bars);c.timeScale().fitContent();let statuses=Object.entries(j.feeds||{}).map(([k,v])=>k.toUpperCase()+': '+(v.ok?'متاح ('+v.count+')':'غير متاح')).join(' | ');document.getElementById('msg').textContent=statuses+' — شموع تاريخية من مختلف الجلسات عند توفر الاشتراك؛ صافي السيولة الحقيقي غير مفعّل بعد.';}catch(e){document.getElementById('msg').textContent=e.message}}
 window.addEventListener('load',()=>openSymbol());</script></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
@@ -25,14 +25,36 @@ class Handler(BaseHTTPRequestHandler):
    if not s or len(s)>12 or not all(c.isalpha() or c=='.' for c in s):return self.out(400,{'error':'رمز سهم غير صالح'})
    key=os.getenv('ALPACA_API_KEY','');sec=os.getenv('ALPACA_SECRET_KEY','')
    if not key or not sec:return self.out(503,{'error':'أضف مفاتيح Alpaca إلى Railway Variables لعرض الشموع الحقيقية'})
-   try:
-    from datetime import datetime,timedelta,timezone
-    end=datetime.now(timezone.utc);start=end-timedelta(days=4)
-    params=urllib.parse.urlencode({'symbols':s,'timeframe':'1Min','start':start.isoformat().replace('+00:00','Z'),'end':end.isoformat().replace('+00:00','Z'),'limit':1000,'feed':'sip'})
-    req=urllib.request.Request('https://data.alpaca.markets/v2/stocks/bars?'+params,headers={'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':sec})
-    with urllib.request.urlopen(req,timeout=12) as res:d=json.load(res)
-    bars=[{'time':int(datetime.fromisoformat(x['t'].replace('Z','+00:00')).timestamp()),'open':x['o'],'high':x['h'],'low':x['l'],'close':x['c']} for x in d.get('bars',{}).get(s,[])]
-    return self.out(200,{'bars':bars})
-   except Exception as e:return self.out(502,{'error':'تعذر جلب شموع Alpaca؛ تحقق من اشتراك SIP والمفاتيح'})
+   from datetime import datetime,timedelta,timezone
+   import urllib.error
+   end=datetime.now(timezone.utc);start=end-timedelta(days=3)
+   stamp=lambda d:d.isoformat().replace('+00:00','Z')
+   headers={'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':sec}
+   merged={};sources={};errors={}
+   for feed in ('sip','boats'):
+    try:
+     token=None;count=0;total=0
+     while count<5:
+      params={'symbols':s,'timeframe':'1Min','start':stamp(start),'end':stamp(end),'limit':10000,'feed':feed,'sort':'asc'}
+      if token:params['page_token']=token
+      req=urllib.request.Request('https://data.alpaca.markets/v2/stocks/bars?'+urllib.parse.urlencode(params),headers=headers)
+      with urllib.request.urlopen(req,timeout=15) as res:d=json.load(res)
+      for x in d.get('bars',{}).get(s,[]):
+       t=int(datetime.fromisoformat(x['t'].replace('Z','+00:00')).timestamp())
+       if feed=='boats' or t not in merged:
+        merged[t]={'time':t,'open':x['o'],'high':x['h'],'low':x['l'],'close':x['c'],'feed':feed}
+       total+=1
+      token=d.get('next_page_token');count+=1
+      if not token:break
+     sources[feed]={'ok':True,'count':total,'partial':bool(token)}
+    except urllib.error.HTTPError as exc:
+     errors[feed]='HTTP '+str(exc.code)+' — راجع صلاحية بيانات '+feed.upper()
+     sources[feed]={'ok':False,'count':0}
+    except Exception:
+     errors[feed]='تعذر جلب بيانات '+feed.upper()
+     sources[feed]={'ok':False,'count':0}
+   if not merged:return self.out(502,{'error':'تعذر الوصول لبيانات SIP وBOATS؛ تحقق من المفاتيح وصلاحيات الاشتراك','feeds':sources,'details':errors})
+   bars=sorted(merged.values(),key=lambda x:x['time'])
+   return self.out(200,{'bars':bars,'feeds':sources,'details':errors,'coverage':'SIP including extended sessions + BOATS overnight where available','live':False})
   return self.out(404,{'error':'Not found'})
 if __name__=='__main__':ThreadingHTTPServer(('0.0.0.0',int(os.getenv('PORT','8080'))),Handler).serve_forever()
