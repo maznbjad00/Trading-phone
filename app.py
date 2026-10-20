@@ -7,51 +7,61 @@ PAGE=r'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><m
 <div class="main"><section id="list" style="display:none"><div class="notice">هذه نسخة معاينة آمنة؛ لن تعرض إشارات اختراق أو FIRE دون وصول فعلي لبيانات الصفقات. لا توجد أرقام سوق مفبركة.</div><label class="title">رمز السهم</label><input id="search" placeholder="مثال: AAPL" autocapitalize="characters" value="AAPL"><div class="actions"><button onclick="openSymbol()">افتح الشارت</button></div><div id="state" class="light" style="margin-top:15px"></div></section>
 <section class="charts" id="charts"><div class="row"><div><div class="sym" id="symbol">AAPL</div><div class="light">السعر — شموع الدقيقة</div></div><button onclick="page('list')" style="background:#20334b;border:0;color:white;padding:10px;border-radius:8px">رجوع</button></div><div class="title">شموع دقيقة — TradingView Lightweight Charts</div><div id="candles" class="chart"></div><div class="title">صافي السيولة بالدقيقة</div><div id="flow" class="chart flow"></div><div class="notice" id="msg" style="padding:5px;font-size:10px;line-height:1.35">صافي السيولة يحتاج صفقات منفذة وبيانات اتجاه التداول؛ لا يُستنتج من شموع OHLC وحدها.</div></section></div><div class="footer">الليل المالي — قراءة وتحليل فقط، لا ينفذ أوامر تداول</div>
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script><script>
-let c,f;function page(n){document.getElementById('list').style.display=n==='list'?'block':'none';document.getElementById('charts').style.display=n==='charts'?'block':'none';document.getElementById('tab-list').classList.toggle('active',n==='list');document.getElementById('tab-charts').classList.toggle('active',n==='charts');if(n==='charts'&&c){setTimeout(()=>{c.applyOptions({width:document.getElementById('candles').clientWidth});f.applyOptions({width:document.getElementById('flow').clientWidth})},80)}}
+let c,f;let syncLock=false;let refreshTimer=null;
+function syncCharts(a,b){const x=a.timeScale(),y=b.timeScale();x.subscribeVisibleLogicalRangeChange(r=>{if(syncLock||!r)return;syncLock=true;try{y.setVisibleLogicalRange(r)}catch(e){}syncLock=false});y.subscribeVisibleLogicalRangeChange(r=>{if(syncLock||!r)return;syncLock=true;try{x.setVisibleLogicalRange(r)}catch(e){}syncLock=false})}
+function page(n){document.getElementById('list').style.display=n==='list'?'block':'none';document.getElementById('charts').style.display=n==='charts'?'block':'none';document.getElementById('tab-list').classList.toggle('active',n==='list');document.getElementById('tab-charts').classList.toggle('active',n==='charts');if(n==='charts'&&c){setTimeout(()=>{c.applyOptions({width:document.getElementById('candles').clientWidth});f.applyOptions({width:document.getElementById('flow').clientWidth})},80)}}
 function chart(id,h){let el=document.getElementById(id);return LightweightCharts.createChart(el,{width:el.clientWidth,height:h,layout:{background:{color:'#0d1d30'},textColor:'#a7bed9'},grid:{vertLines:{color:'#182b42'},horzLines:{color:'#182b42'}},rightPriceScale:{borderColor:'#304860'},timeScale:{borderColor:'#304860',timeVisible:true,secondsVisible:false}})}
-async function openSymbol(){let s=document.getElementById('search').value.trim().toUpperCase().replace(/[^A-Z.]/g,'');if(!s)return;document.getElementById('symbol').textContent=s;page('charts');document.getElementById('candles').innerHTML='';document.getElementById('flow').innerHTML='';c=chart('candles',document.getElementById('candles').clientHeight);f=chart('flow',document.getElementById('flow').clientHeight);let series=c.addCandlestickSeries({upColor:'#0d1d30',downColor:'#ef607b',borderUpColor:'#55deb0',borderDownColor:'#ef607b',wickUpColor:'#55deb0',wickDownColor:'#ef607b'});let flow=f.addLineSeries({color:'#55baf4',lineWidth:2});try{let r=await fetch('/api/bars?symbol='+encodeURIComponent(s));let j=await r.json();if(!r.ok){let details=Object.entries(j.details||{}).map(([feed,msg])=>feed.toUpperCase()+': '+msg).join(' | ');throw Error((j.error||'تعذر تحميل البيانات')+(details?' — '+details:'')+' (HTTP '+r.status+')')};series.setData(j.bars);c.timeScale().fitContent();let statuses=Object.entries(j.feeds||{}).map(([k,v])=>k.toUpperCase()+': '+(v.ok?'متاح ('+v.count+')':'غير متاح')).join(' | ');document.getElementById('msg').textContent=statuses+' — جاري حساب السيولة من الصفقات...';try{let lr=await fetch('/api/liquidity?symbol='+encodeURIComponent(s));let lj=await lr.json();if(!lr.ok)throw Error(lj.error+' '+JSON.stringify(lj.feeds||{}));flow.setData(lj.points);f.timeScale().fitContent();document.getElementById('msg').textContent='صافي السيولة التقديري (Tick Rule)، بالدقيقة، منذ بداية الليلي — '+(lj.partial?'العينة جزئية؛ بعض الصفقات لم تحمّل':'')+' | '+Object.entries(lj.feeds||{}).map(([k,v])=>k.toUpperCase()+': '+(v.ok?v.trades+' صفقة':'غير متاح')).join(' | ')}catch(liqerr){document.getElementById('msg').textContent='الشموع متاحة؛ السيولة غير متاحة: '+liqerr.message};}catch(e){document.getElementById('msg').textContent=e.message}}
+async function openSymbol(){let s=document.getElementById('search').value.trim().toUpperCase().replace(/[^A-Z.]/g,'');if(!s)return;document.getElementById('symbol').textContent=s;page('charts');if(refreshTimer)clearInterval(refreshTimer);document.getElementById('candles').innerHTML='';document.getElementById('flow').innerHTML='';c=chart('candles',document.getElementById('candles').clientHeight);f=chart('flow',document.getElementById('flow').clientHeight);let series=c.addCandlestickSeries({upColor:'#0d1d30',downColor:'#ef607b',borderUpColor:'#55deb0',borderDownColor:'#ef607b',wickUpColor:'#55deb0',wickDownColor:'#ef607b'});let flow=f.addLineSeries({color:'#55baf4',lineWidth:2});syncCharts(c,f);try{let r=await fetch('/api/bars?symbol='+encodeURIComponent(s));let j=await r.json();if(!r.ok){let details=Object.entries(j.details||{}).map(([feed,msg])=>feed.toUpperCase()+': '+msg).join(' | ');throw Error((j.error||'تعذر تحميل البيانات')+(details?' — '+details:'')+' (HTTP '+r.status+')')};series.setData(j.bars);c.timeScale().fitContent();let statuses=Object.entries(j.feeds||{}).map(([k,v])=>k.toUpperCase()+': '+(v.ok?'متاح ('+v.count+')':'غير متاح')).join(' | ');document.getElementById('msg').textContent=statuses+' — جاري حساب السيولة من الصفقات...';try{let lr=await fetch('/api/liquidity?symbol='+encodeURIComponent(s));let lj=await lr.json();if(!lr.ok)throw Error(lj.error+' '+JSON.stringify(lj.feeds||{}));flow.setData(lj.points);const currentSession=lj.active_session==='night'?'الليلي (20:00–04:00)':'اليومي (04:00–20:00)';document.getElementById('msg').textContent='صافي السيولة التقديري — '+currentSession+'، يبدأ من الصفر عند بداية الجلسة — '+(lj.partial?'العينة جزئية؛ بعض الصفقات لم تحمّل':'')+' | '+Object.entries(lj.feeds||{}).map(([k,v])=>k.toUpperCase()+': '+(v.ok?v.trades+' صفقة':'غير متاح')).join(' | ')}catch(liqerr){document.getElementById('msg').textContent='الشموع متاحة؛ السيولة غير متاحة: '+liqerr.message};}catch(e){document.getElementById('msg').textContent=e.message}}
 window.addEventListener('load',()=>openSymbol());</script></body></html>'''
 
 def get_liquidity(symbol,key,sec):
  from datetime import datetime,timedelta,timezone
  from zoneinfo import ZoneInfo
- now=datetime.now(timezone.utc);ny=now.astimezone(ZoneInfo('America/New_York'))
- start_ny=ny.replace(hour=20,minute=0,second=0,microsecond=0)
- if ny.hour<20:start_ny-=timedelta(days=1)
- # Keep scan bounded; historical full-session tick downloads may require paging / backend worker.
- start=max(start_ny.astimezone(timezone.utc),now-timedelta(hours=24))
+ now=datetime.now(timezone.utc)
+ ny=now.astimezone(ZoneInfo('America/New_York'))
+ night=ny.hour>=20 or ny.hour<4
+ if night:
+  session_start=ny.replace(hour=20,minute=0,second=0,microsecond=0)
+  if ny.hour<4:session_start-=timedelta(days=1)
+  session_end=session_start+timedelta(hours=8)
+  feed='boats'
+ else:
+  session_start=ny.replace(hour=4,minute=0,second=0,microsecond=0)
+  session_end=session_start+timedelta(hours=16)
+  feed='sip'
+ start=session_start.astimezone(timezone.utc)
+ end=min(now,session_end.astimezone(timezone.utc))
+ stamp=lambda d:d.isoformat().replace('+00:00','Z')
  headers={'APCA-API-KEY-ID':key,'APCA-API-SECRET-KEY':sec}
- stamps=lambda d:d.isoformat().replace('+00:00','Z')
- buckets={};statuses={};partial=False
- for feed in ('sip','boats'):
-  previous=None;direction=0;token=None;count=0
-  try:
-   for page in range(10):
-    p={'symbols':symbol,'start':stamps(start),'end':stamps(now),'limit':10000,'feed':feed,'sort':'asc'}
-    if token:p['page_token']=token
-    req=urllib.request.Request('https://data.alpaca.markets/v2/stocks/trades?'+urllib.parse.urlencode(p),headers=headers)
-    with urllib.request.urlopen(req,timeout=18) as resp: data=json.load(resp)
-    trades=data.get('trades',{}).get(symbol,[])
-    for trade in trades:
-     price=float(trade['p']);size=float(trade['s'])
-     if previous is not None:
-      if price>previous:direction=1
-      elif price<previous:direction=-1
-     previous=price
-     if direction:
-      t=int(datetime.fromisoformat(trade['t'].replace('Z','+00:00')).timestamp())//60*60
-      buckets[t]=buckets.get(t,0.0)+direction*price*size
-     count+=1
-    token=data.get('next_page_token')
-    if not token:break
-   if token:partial=True
-   statuses[feed]={'ok':True,'trades':count,'partial':bool(token)}
-  except urllib.error.HTTPError as exc:statuses[feed]={'ok':False,'error':'HTTP '+str(exc.code)}
-  except Exception:statuses[feed]={'ok':False,'error':'تعذر تنزيل الصفقات'}
- total=0.0;points=[]
- for t,val in sorted(buckets.items()):
-  total+=val;points.append({'time':t,'value':round(total,2)})
- return {'points':points,'feeds':statuses,'partial':partial,'method':'tick rule price change — signed notional estimate','start':stamps(start)}
+ buckets={};token=None;count=0;direction=0;last_price=None;partial=False
+ try:
+  for page in range(20):
+   params={'symbols':symbol,'start':stamp(start),'end':stamp(end),'limit':10000,'feed':feed,'sort':'asc'}
+   if token:params['page_token']=token
+   req=urllib.request.Request('https://data.alpaca.markets/v2/stocks/trades?'+urllib.parse.urlencode(params),headers=headers)
+   with urllib.request.urlopen(req,timeout=20) as resp:data=json.load(resp)
+   for trade in data.get('trades',{}).get(symbol,[]):
+    price=float(trade['p']);size=float(trade['s'])
+    if last_price is not None:
+     if price>last_price:direction=1
+     elif price<last_price:direction=-1
+    last_price=price
+    if direction:
+     minute=int(datetime.fromisoformat(trade['t'].replace('Z','+00:00')).timestamp())//60*60
+     buckets[minute]=buckets.get(minute,0.0)+direction*price*size
+    count+=1
+   token=data.get('next_page_token')
+   if not token:break
+  partial=bool(token)
+ except urllib.error.HTTPError as exc:
+  return {'points':[],'feeds':{feed:{'ok':False,'error':'HTTP '+str(exc.code)}},'active_session':'night' if night else 'day','partial':True}
+ except Exception:
+  return {'points':[],'feeds':{feed:{'ok':False,'error':'تعذر طلب الصفقات'}},'active_session':'night' if night else 'day','partial':True}
+ cumulative=0.0;points=[]
+ for t,v in sorted(buckets.items()):
+  cumulative+=v
+  points.append({'time':t,'value':round(cumulative,2)})
+ return {'points':points,'feeds':{feed:{'ok':True,'trades':count,'partial':partial}},'active_session':'night' if night else 'day','session_start':stamp(start),'partial':partial,'method':'tick rule signed notional approximation'}
 
 class Handler(BaseHTTPRequestHandler):
  def out(self,code,data,typ='application/json; charset=utf-8'):
