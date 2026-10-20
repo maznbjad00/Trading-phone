@@ -1,4 +1,4 @@
-import os, json, base64, hmac, urllib.request, urllib.parse
+import os, json, urllib.request, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PAGE=r'''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><title>الليل المالي</title><style>
@@ -16,19 +16,8 @@ class Handler(BaseHTTPRequestHandler):
  def out(self,code,data,typ='application/json; charset=utf-8'):
   raw=data.encode() if isinstance(data,str) else json.dumps(data).encode()
   self.send_response(code);self.send_header('Content-Type',typ);self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
- def auth(self):
-  pwd=os.getenv('APP_PASSWORD','')
-  if not pwd or len(pwd)<12:return False
-  head=self.headers.get('Authorization','')
-  try:
-   method,token=head.split(' ',1)
-   decoded=base64.b64decode(token).decode('utf-8')
-   return method.lower()=='basic' and hmac.compare_digest(decoded,'layl:'+pwd)
-  except Exception:return False
  def do_GET(self):
   if self.path.startswith('/health'):return self.out(200,{'ok':True})
-  if not self.auth():
-   self.send_response(401);self.send_header('WWW-Authenticate','Basic realm="Layl private"');self.end_headers();return
   if self.path=='/':return self.out(200,PAGE,'text/html; charset=utf-8')
   path=urllib.parse.urlsplit(self.path)
   if path.path=='/api/bars':
